@@ -221,6 +221,29 @@ def whisper_timing(torch, model_id, audio, device, dtype, runs):
     del pipe
 
 
+def app_view(torch):
+    """VoiceStudio's own decisions on this host, when run from a checkout:
+    the device family it routes to, and which ASR engine and device it picks."""
+    backend = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend")
+    if not os.path.isdir(os.path.join(backend, "core")):
+        print("(not run from a VoiceStudio checkout: skipped)")
+        return
+    sys.path.insert(0, backend)
+    os.environ.setdefault("OMNIVOICE_DISABLE_FILE_LOG", "1")
+    from core import device_caps
+
+    print(f"torch arch list: {device_caps.build_arch_list(torch)}")
+    print(f"arch unsupported: {device_caps.arch_unsupported(torch)}")
+    print(f"host caps: {device_caps.detect_host_caps()}")
+    from services import asr_backend
+
+    print(
+        f"CTranslate2 GPUs: {asr_backend._ctranslate2_hip_devices()} | "
+        f"CTranslate2 gets GPU: {asr_backend._ctranslate2_cuda_ok()} | "
+        f"ASR auto-pick: {asr_backend._auto_detect()}"
+    )
+
+
 CT2_CHILD = r"""
 import json, os, time
 cfg = json.loads(os.environ["PROBE_CT2"])
@@ -322,6 +345,7 @@ def main() -> int:
             print(dll)
     if not args.audio:
         print("\n(no audio file given: skipping ASR sections)")
+        run_guarded("VoiceStudio's view", app_view, torch)
         return 0
     audio = run_guarded("audio", load_audio_16k, args.audio)
     if audio is None:
@@ -332,6 +356,8 @@ def main() -> int:
         run_guarded("PyTorch Whisper CPU fp32", whisper_timing, torch, args.hf_model, audio, "cpu", torch.float32, 2)
     if not args.skip_ct2:
         run_guarded("CTranslate2 / faster-whisper matrix", ct2_matrix, audio, args.ct2_model, dgpu)
+    # Last: it imports CTranslate2 into this process, which would skew CPU timings.
+    run_guarded("VoiceStudio's view", app_view, torch)
     return 0
 
 
