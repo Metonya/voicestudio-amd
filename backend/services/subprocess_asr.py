@@ -200,7 +200,10 @@ class IsolatedFasterWhisperBackend(SubprocessASRBackend):
     # Same engine as FasterWhisperBackend, so the same device support — the
     # sidecar picks cuda/cpu itself via `_device()`. Without this the registry
     # default ("cpu",) would dishonestly report cpu_only routing on CUDA hosts.
+    # ROCm is added by asr_backend._gpu_compat_for when CTranslate2's HIP
+    # build is installed — the sidecar makes the same call (_get_model).
     gpu_compat = ("cuda", "cpu")
+    ctranslate2_engine = True
 
     @classmethod
     def is_available(cls) -> tuple[bool, str]:

@@ -199,7 +199,15 @@ def ensure_ctranslate2_loadable() -> tuple[bool, str]:
     """
 
     result: tuple[bool, str]
-    if sys.platform != "linux":
+    if sys.platform == "win32":
+        # No exec-stack rule on Windows. The ROCm build of CTranslate2 needs
+        # the HIP runtime from the rocm-sdk wheels on the DLL search path
+        # before it is imported, whatever the import order (see rocm_windows).
+        from core.rocm_windows import register_rocm_dll_dirs
+
+        register_rocm_dll_dirs()
+        result = (True, "not applicable off Linux")
+    elif sys.platform != "linux":
         # Only Linux rejects an exec-stack request at dlopen time.
         result = (True, "not applicable off Linux")
     else:
@@ -239,6 +247,26 @@ def ensure_ctranslate2_loadable() -> tuple[bool, str]:
                 result = (True, "no exec-stack request")
 
     return result
+
+
+def ctranslate2_gpu_count() -> int:
+    """GPUs the installed CTranslate2 build can drive, 0 when none or unloadable.
+
+    CTranslate2 names its GPU device ``"cuda"`` in both builds. The NVIDIA
+    build answers 0 on an AMD-only host; the ROCm (HIP) build, published on
+    CTranslate2's GitHub releases since 4.7, counts HIP devices. That makes
+    this the one honest test of whether ``device="cuda"`` will work on a ROCm
+    host, where torch's own answer says nothing about CTranslate2 (#1529).
+    """
+    ok, _detail = ensure_ctranslate2_loadable()
+    if not ok:
+        return 0
+    try:
+        import ctranslate2
+
+        return int(ctranslate2.get_cuda_device_count())
+    except Exception:  # noqa: BLE001 — unloadable or broken build: no GPU
+        return 0
 
 
 def reset_ctranslate2_cache() -> None:

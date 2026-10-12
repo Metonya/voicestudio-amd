@@ -102,9 +102,15 @@ def _get_model():
         try:
             # The probe honors the user compute-device override and the
             # ROCm/CT2 incompatibility (#1529) — the child must agree with
-            # the parent's device decision, not re-derive its own.
+            # the parent's device decision, not re-derive its own. A ROCm
+            # host gets the GPU only from CTranslate2's HIP build, which
+            # names it "cuda" too (asr_backend._ctranslate2_cuda_ok).
             from core.device_caps import detect_host_caps
-            device = "cuda" if detect_host_caps().family == "cuda" else "cpu"
+            from core.execstack import ctranslate2_gpu_count
+
+            family = detect_host_caps().family
+            hip_ok = family == "rocm" and ctranslate2_gpu_count() > 0
+            device = "cuda" if family == "cuda" or hip_ok else "cpu"
         except Exception:
             # Fail SAFE: guessing "cuda" from torch here would bypass a cpu
             # override and hand CTranslate2 HIP-flavoured cuda on ROCm

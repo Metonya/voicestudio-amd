@@ -98,7 +98,7 @@ def test_the_probe_is_cached(monkeypatch, cudnn8, cudnn8_missing):
     "verdict",
     [
         (False, "no CUDA device — CTranslate2 runs on CPU"),
-        (False, "ROCm build — CTranslate2 has no ROCm backend, runs on CPU"),
+        (False, "ROCm build — cuDNN is NVIDIA-only, CTranslate2 uses HIP or the CPU"),
         (False, "torch unavailable (ImportError)"),
     ],
 )

@@ -658,10 +658,12 @@ def forced_align(segments: list, audio, language_code: str, device: str | None =
 class WhisperXBackend(ASRBackend):
     id = "whisperx"
     display_name = "WhisperX (faster-whisper + wav2vec2 forced alignment)"
-    # CTranslate2 backend: CUDA fp16 or CPU int8 (see _pick_device). ROCm not
-    # claimed — CTranslate2 has no upstream HIP build, so a ROCm host honestly
-    # gets cpu_fallback rather than a false GPU promise.
+    # CTranslate2 backend: CUDA fp16 or CPU int8 (see _pick_device). ROCm is
+    # not claimed statically — only CTranslate2's HIP build drives an AMD GPU,
+    # so _gpu_compat_for adds it when that build is installed and a ROCm host
+    # otherwise honestly gets cpu_fallback rather than a false GPU promise.
     gpu_compat = ("cuda", "cpu")
+    ctranslate2_engine = True
 
     def __init__(self):
         self._model_name = os.environ.get("ASR_MODEL_WHISPERX", "large-v3")
@@ -1116,8 +1118,9 @@ class WhisperXBackend(ASRBackend):
 class FasterWhisperBackend(ASRBackend):
     id = "faster-whisper"
     display_name = "Faster-Whisper (CTranslate2 — Linux/Windows/macOS)"
-    # CTranslate2: CUDA or CPU (no upstream ROCm/HIP build — see WhisperX note).
+    # CTranslate2: CUDA or CPU; ROCm only with its HIP build (see WhisperX note).
     gpu_compat = ("cuda", "cpu")
+    ctranslate2_engine = True
 
     def __init__(self, model_name: str | None = None):
         # Defaulting to the CTranslate2-converted large-v3 repo. Matches
@@ -1439,9 +1442,9 @@ class MLXWhisperBackend(ASRBackend):
 class PyTorchWhisperBackend(ASRBackend):
     id = "pytorch-whisper"
     display_name = "PyTorch Whisper (CUDA / CPU via transformers pipeline)"
-    # Pure transformers pipeline → runs wherever torch does (CUDA, MPS, CPU).
-    # ROCm-via-HIP would also work but is left unclaimed pending verification.
-    gpu_compat = ("cuda", "mps", "cpu")
+    # Pure transformers pipeline → runs wherever torch does. ROCm verified on
+    # an RX 7900 XT under native Windows: large-v3-turbo fp16 at RTF 0.075.
+    gpu_compat = ("cuda", "rocm", "mps", "cpu")
 
     def __init__(self, asr_pipe=None):
         # Reuses the `_asr_pipe` attached to the TTS model when available.
@@ -2840,7 +2843,7 @@ def list_backends() -> list[dict]:
         else:
             _LAST_ERRORS[bid] = scrub_text(msg)
         isolation = "subprocess" if getattr(cls, "_is_subprocess_isolated", False) else "in-process"
-        gpu_compat = getattr(cls, "gpu_compat", ("cpu",))
+        gpu_compat = _gpu_compat_for(cls, caps)
         routing = routing_fields(gpu_compat, caps)
         # Cached load-time facts are valid only while their exact backend still
         # owns live model state. Recompute from that instance so unload/reaping
@@ -2938,14 +2941,42 @@ def _rocm_torch() -> bool:
         return False
 
 
+def _ctranslate2_hip_devices() -> int:
+    """AMD GPUs the installed CTranslate2 can drive: >0 only for its ROCm build
+    on a ROCm torch host. Never imports CTranslate2 off ROCm."""
+    if not _rocm_torch():
+        return 0
+    from core.execstack import ctranslate2_gpu_count
+
+    return ctranslate2_gpu_count()
+
+
+def _gpu_compat_for(cls, caps) -> tuple[str, ...]:
+    """``cls.gpu_compat``, plus ``"rocm"`` for a CTranslate2 engine on a ROCm
+    host whose installed CTranslate2 is the HIP build — routing then reports
+    the GPU it really uses instead of a CPU fallback (and never the reverse)."""
+    compat = tuple(getattr(cls, "gpu_compat", ("cpu",)))
+    if (
+        getattr(cls, "ctranslate2_engine", False)
+        and getattr(caps, "family", None) == "rocm"
+        and "rocm" not in compat
+        and _ctranslate2_hip_devices() > 0
+    ):
+        return ("rocm", *compat)
+    return compat
+
+
 def _ctranslate2_cuda_ok() -> bool:
     """Whether CTranslate2 (whisperx / faster-whisper) may use ``"cuda"``.
 
-    CTranslate2 has NO HIP backend. On a ROCm host torch says cuda is
-    available (HIP), the device string is handed to CTranslate2, and its
-    NVIDIA CUDA runtime dies with "CUDA driver version is insufficient for
-    CUDA runtime version" — the #1529 report, an AMD RX 7900 XTX in the
-    :rocm Docker image. Real CUDA only; ROCm hosts take the CPU path here
+    On a ROCm host torch says cuda is available (HIP), but that says nothing
+    about CTranslate2: the PyPI build is NVIDIA-only, and handing it the
+    device string dies with "CUDA driver version is insufficient for CUDA
+    runtime version" — the #1529 report, an AMD RX 7900 XTX in the :rocm
+    Docker image. CTranslate2's ROCm (HIP) build, published on its GitHub
+    releases since 4.7, does drive the AMD GPU under the same ``"cuda"``
+    name, so a ROCm host gets the GPU exactly when the installed build counts
+    a device (``_ctranslate2_hip_devices``); otherwise it takes the CPU path
     (auto-detect prefers pytorch-whisper there, which does use HIP).
 
     Also honors the user compute-device override (Settings → Performance /
@@ -2956,7 +2987,10 @@ def _ctranslate2_cuda_ok() -> bool:
     try:
         from core.device_caps import detect_host_caps
 
-        if detect_host_caps().family != "cuda":
+        family = detect_host_caps().family
+        if family == "rocm":
+            return _ctranslate2_hip_devices() > 0
+        if family != "cuda":
             return False
     except Exception:  # noqa: BLE001 — fail SAFE, not fast
         # Without a working probe we can't know whether an override or a
@@ -2999,12 +3033,19 @@ def _auto_detect() -> str:
     if _mps_available() and _probe_available(MLXWhisperBackend):
         return "mlx-whisper"
     # Same class as the Apple case, on the ROCm axis (#1529): whisperx and
-    # faster-whisper are CTranslate2, which has no HIP backend — on a ROCm
-    # host they run on the CPU while the GPU sits idle (and before
+    # faster-whisper are CTranslate2, whose PyPI build is NVIDIA-only — on a
+    # ROCm host they run on the CPU while the GPU sits idle (and before
     # _ctranslate2_cuda_ok they died outright trying NVIDIA's runtime).
     # pytorch-whisper is a pure transformers pipeline riding torch itself,
-    # so it genuinely uses the HIP GPU there.
-    if _rocm_torch() and _cuda_reported_available() and _probe_available(PyTorchWhisperBackend):
+    # so it genuinely uses the HIP GPU there. With CTranslate2's ROCm build
+    # installed the CTranslate2 engines use the GPU too, and whisperx keeps
+    # its forced alignment, so the CUDA order below applies unchanged.
+    if (
+        _rocm_torch()
+        and _cuda_reported_available()
+        and _ctranslate2_hip_devices() == 0
+        and _probe_available(PyTorchWhisperBackend)
+    ):
         return "pytorch-whisper"
     if _probe_available(WhisperXBackend):
         return "whisperx"
@@ -3213,7 +3254,7 @@ def load_active_asr_backend(
 
             cls = type(backend)
             caps = detect_host_caps()
-            routing = routing_fields(getattr(cls, "gpu_compat", ("cpu",)), caps)
+            routing = routing_fields(_gpu_compat_for(cls, caps), caps)
             _RUNTIME_EVIDENCE[bid] = execution_snapshot(
                 engine_id=bid,
                 engine_cls=cls,

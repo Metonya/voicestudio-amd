@@ -460,6 +460,7 @@ def test_rocm_host_picks_pytorch_whisper_not_ctranslate2(monkeypatch):
     """The #1529 regression: before the fix this returned "whisperx"."""
     monkeypatch.setattr(ab, "_mps_available", lambda: False)
     monkeypatch.setattr(ab, "_rocm_torch", lambda: True)
+    monkeypatch.setattr(ab, "_ctranslate2_hip_devices", lambda: 0)
     monkeypatch.setattr(ab, "_cuda_reported_available", lambda: True)
     monkeypatch.setattr(
         ab, "_probe_available", _probe({"whisperx", "faster-whisper", "pytorch-whisper"})
@@ -471,6 +472,7 @@ def test_rocm_host_without_transformers_still_degrades_to_whisperx_on_cpu(monkey
     """pytorch-whisper unavailable → whisperx is still correct, on the CPU."""
     monkeypatch.setattr(ab, "_mps_available", lambda: False)
     monkeypatch.setattr(ab, "_rocm_torch", lambda: True)
+    monkeypatch.setattr(ab, "_ctranslate2_hip_devices", lambda: 0)
     monkeypatch.setattr(ab, "_cuda_reported_available", lambda: True)
     monkeypatch.setattr(ab, "_probe_available", _probe({"whisperx", "faster-whisper"}))
     assert ab._auto_detect() == "whisperx"
@@ -505,6 +507,72 @@ def test_ctranslate2_never_gets_cuda_on_a_rocm_build(monkeypatch):
     monkeypatch.setattr(ab, "_rocm_torch", lambda: False)
     assert ab._ctranslate2_cuda_ok() is True
     assert ab.WhisperXBackend._pick_device() == ("cuda", "float16")
+
+
+def test_rocm_host_with_ctranslate2_hip_build_keeps_whisperx(monkeypatch):
+    """CTranslate2's ROCm build drives the AMD GPU, so the CUDA order applies:
+    whisperx (GPU transcription plus forced alignment) over pytorch-whisper."""
+    monkeypatch.setattr(ab, "_mps_available", lambda: False)
+    monkeypatch.setattr(ab, "_rocm_torch", lambda: True)
+    monkeypatch.setattr(ab, "_cuda_reported_available", lambda: True)
+    monkeypatch.setattr(ab, "_ctranslate2_hip_devices", lambda: 1)
+    monkeypatch.setattr(
+        ab, "_probe_available", _probe({"whisperx", "faster-whisper", "pytorch-whisper"})
+    )
+    assert ab._auto_detect() == "whisperx"
+
+
+def test_ctranslate2_gets_the_gpu_on_rocm_only_from_its_hip_build(monkeypatch):
+    """A ROCm host hands CTranslate2 "cuda" exactly when the installed build
+    counts an AMD device; the NVIDIA build (count 0) keeps the #1529 refusal."""
+    from core.device_caps import HostCaps
+
+    monkeypatch.setattr(
+        "core.device_caps.detect_host_caps",
+        lambda: HostCaps(family="rocm", available_families=("rocm", "cpu")),
+    )
+    monkeypatch.setattr(ab, "_rocm_torch", lambda: True)
+    monkeypatch.setattr(ab, "_cuda_reported_available", lambda: True)
+
+    monkeypatch.setattr(ab, "_ctranslate2_hip_devices", lambda: 0)
+    assert ab._ctranslate2_cuda_ok() is False
+    assert ab.WhisperXBackend._pick_device() == ("cpu", "int8")
+
+    monkeypatch.setattr(ab, "_ctranslate2_hip_devices", lambda: 1)
+    assert ab._ctranslate2_cuda_ok() is True
+    assert ab.WhisperXBackend._pick_device() == ("cuda", "float16")
+
+
+def test_ctranslate2_hip_probe_never_imports_ctranslate2_off_rocm(monkeypatch):
+    import core.execstack as execstack
+
+    def _must_not_run():
+        raise AssertionError("CTranslate2 probed on a non-ROCm torch")
+
+    monkeypatch.setattr(ab, "_rocm_torch", lambda: False)
+    monkeypatch.setattr(execstack, "ctranslate2_gpu_count", _must_not_run)
+    assert ab._ctranslate2_hip_devices() == 0
+
+
+def test_routing_claims_rocm_for_ctranslate2_only_with_its_hip_build(monkeypatch):
+    from core.device_caps import HostCaps
+
+    rocm = HostCaps(family="rocm", available_families=("rocm", "cpu"))
+    cuda = HostCaps(family="cuda", available_families=("cuda", "cpu"))
+
+    monkeypatch.setattr(ab, "_ctranslate2_hip_devices", lambda: 0)
+    assert ab._gpu_compat_for(ab.WhisperXBackend, rocm) == ("cuda", "cpu")
+
+    monkeypatch.setattr(ab, "_ctranslate2_hip_devices", lambda: 1)
+    assert ab._gpu_compat_for(ab.WhisperXBackend, rocm) == ("rocm", "cuda", "cpu")
+    assert ab._gpu_compat_for(ab.FasterWhisperBackend, rocm) == ("rocm", "cuda", "cpu")
+    # CUDA hosts and non-CTranslate2 engines keep their static claim.
+    assert ab._gpu_compat_for(ab.WhisperXBackend, cuda) == ("cuda", "cpu")
+    assert ab._gpu_compat_for(ab.NeMoASRBackend, rocm) == ("cuda", "cpu")
+
+
+def test_pytorch_whisper_claims_rocm():
+    assert "rocm" in ab.PyTorchWhisperBackend.gpu_compat
 
 
 def test_ctranslate2_gate_fails_safe_when_the_probe_breaks(monkeypatch):

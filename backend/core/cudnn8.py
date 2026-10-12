@@ -133,8 +133,9 @@ def _torch_wants_cudnn8() -> tuple[bool, str]:
     cuDNN is a CUDA library: with no CUDA device, CTranslate2 runs on the CPU
     and never touches it, so a missing side-load is harmless and must not
     disqualify the engine. ROCm is excluded for the same reason and one more —
-    ``torch.cuda.is_available()`` is True on a HIP build, but CTranslate2 has
-    no ROCm backend, so it is CPU-only there regardless. Without this branch a
+    ``torch.cuda.is_available()`` is True on a HIP build, but CTranslate2 there
+    is either its NVIDIA build (CPU-only on that host) or its HIP build, which
+    has no cuDNN dependency at all. Without this branch a
     Windows/CUDA fix would silently downgrade every ROCm user's ASR engine.
     Mirrors ``bootstrap.rs::classify_cuda_probe``, which likewise declines to
     install cuDNN 8 on HIP hosts (#124).
@@ -144,7 +145,7 @@ def _torch_wants_cudnn8() -> tuple[bool, str]:
     except Exception as e:  # noqa: BLE001 — no torch: nothing will run anyway
         return False, f"torch unavailable ({type(e).__name__})"
     if getattr(getattr(torch, "version", None), "hip", None):
-        return False, "ROCm build — CTranslate2 has no ROCm backend, runs on CPU"
+        return False, "ROCm build — cuDNN is NVIDIA-only, CTranslate2 uses HIP or the CPU"
     try:
         if not torch.cuda.is_available():
             return False, "no CUDA device — CTranslate2 runs on CPU"

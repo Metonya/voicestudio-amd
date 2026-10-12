@@ -60,12 +60,15 @@ def run_guarded(title, fn, *args):
 def environment(torch):
     print(f"os: {platform.platform()} | python {platform.python_version()}")
     print(f"torch {torch.__version__} | hip {torch.version.hip} | gpu available {torch.cuda.is_available()}")
-    for name in ("transformers", "ctranslate2", "faster_whisper"):
+    # Versions from metadata only: importing ctranslate2 here would load its
+    # own OpenMP runtime next to torch's and skew every CPU timing below.
+    from importlib.metadata import PackageNotFoundError, version
+
+    for name in ("transformers", "ctranslate2", "faster-whisper"):
         try:
-            module = __import__(name)
-            print(f"{name} {getattr(module, '__version__', '?')}")
-        except Exception as exc:
-            print(f"{name}: not importable ({type(exc).__name__})")
+            print(f"{name} {version(name)}")
+        except PackageNotFoundError:
+            print(f"{name}: not installed")
     for var in ("HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES", "MIOPEN_FIND_MODE", "HSA_OVERRIDE_GFX_VERSION"):
         print(f"{var}={os.environ.get(var)}")
 
@@ -151,6 +154,31 @@ def sdpa_backends(torch, device):
             print(f"{backend.name}: OK {seconds / 20 * 1e3:.2f} ms")
         except Exception as exc:
             print(f"{backend.name}: unavailable ({type(exc).__name__}: {str(exc)[:120]})")
+
+
+def cpu_backend(torch):
+    """BLAS/OpenMP build facts and fp32 matmul speed: a slow CPU path in a
+    ROCm torch build shows up here long before a 3-minute Whisper run."""
+    wanted = ("BLAS_INFO", "LAPACK_INFO", "USE_MKL", "USE_MKLDNN", "USE_OPENMP", "USE_ROCM")
+    fields = [
+        field.strip().rsplit(": ", 1)[-1]
+        for field in torch.__config__.show().replace("\n", ",").split(",")
+    ]
+    fields = [field for field in fields if field.split("=", 1)[0] in wanted]
+    print("build: " + ", ".join(fields))
+    for line in torch.__config__.parallel_info().splitlines():
+        if any(key in line for key in ("ATen/Parallel", "at::get_num_threads", "OpenMP", "MKL", "std::thread")):
+            print(line.strip())
+    n = 2048
+    a = torch.randn(n, n)
+    b = torch.randn(n, n)
+    a @ b
+    reps = 5
+    start = time.perf_counter()
+    for _ in range(reps):
+        a @ b
+    seconds = time.perf_counter() - start
+    print(f"fp32 CPU matmul {n}x{n}: {2 * n**3 * reps / seconds / 1e9:.0f} GFLOPS")
 
 
 def load_audio_16k(path: str):
@@ -281,6 +309,7 @@ def main() -> int:
     import torch
 
     run_guarded("environment", environment, torch)
+    run_guarded("CPU backend", cpu_backend, torch)
     found = run_guarded("HIP devices", gpus, torch) or []
     dgpu = pick_dgpu(found)
     device = f"cuda:{dgpu}"

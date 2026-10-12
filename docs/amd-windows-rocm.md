@@ -182,12 +182,20 @@ Sistem: Windows 11 25H2, RX 7900 XT, Adrenalin 26.8.1, Ryzen 9 7900X (dahili GPU
 |---|---|---|
 | ROCm torch kurulumu (TheRock nightly) | ✅ | `2.14.0+rocm10.2.0a20261011`, HIP 7.17, `cuda:0` = RX 7900 XT |
 | Matmul, SDPA, Conv1d (MIOpen), torchaudio Mel, VRAM okuma | ✅ | 19.98 GB VRAM görünüyor |
-| MIOpen uyarıları | ⚠️ Zararsız | `gfx110054` = gfx1100 + 84 CU (hex `54`) için hazır performans veritabanı yok. MIOpen varsayılan kernel'e döner. |
-| PyTorch Whisper `tiny` (GPU) | ⚠️ Yavaş | 8.28 s ses → 15.4 s (RTF 1.86). Büyük ihtimalle **ilk çalıştırma maliyeti** (MIOpen arama + kernel yükleme). Isınmış ölçüm gerekiyor. |
-| CTranslate2 4.8.2 ROCm + faster-whisper (GPU) | ❌ | `hipErrorInvalidKernelFile`. Şüpheliler: dahili GPU (`gfx1036`, wheel'de kernel'i yok), ya da driver'ın HIP runtime'ı ile TheRock runtime'ının karışması. |
-| faster-whisper CPU | ❌ | Ses okuma ve OpenMP hataları (detay bekleniyor). |
+| fp16 matmul (8192²) | ✅ **63.8 TFLOPS** | hipBLASLt düzgün çalışıyor |
+| SDPA | ✅ | FLASH (aotriton) 0.71 ms, EFFICIENT 0.75 ms, MATH 4.80 ms |
+| Kernel launch gecikmesi | ✅ **2.6 µs/op** | CUDA ile aynı seviye. HIP graph çalışıyor ama kazanç yok (3.5 µs/op). |
+| Dahili GPU | ⚠️ | `gfx1036` 1 numaralı cihaz olarak görünüyor. RX 7900 XT 0 numara olduğu için sorun çıkarmadı. |
+| MIOpen uyarıları | ⚠️ Zararsız | `gfx110054` = gfx1100 + 84 CU (hex `54`) için hazır performans veritabanı yok. |
+| PyTorch Whisper large-v3-turbo (GPU fp16) | ✅ **RTF 0.075** | 8.28 s ses: ilk çalıştırma 9.85 s, ısınmış 0.62 s |
+| PyTorch Whisper large-v3-turbo (CPU fp32) | ❌ RTF 25.9 | 215 s. Normalin çok üstünde. Şüphe: aynı süreçte iki OpenMP runtime (`libomp140` + CTranslate2'nin `libiomp5md`). Probe güncellendi. |
+| CTranslate2 4.8.2 ROCm + faster-whisper `tiny` (GPU) | ✅ **ısınmış 0.14 s** | Sadece torch önce import edilince. Önce edilmezse `ctranslate2.dll` bağımlılıkları bulunamıyor (CPU modunda bile). |
 
-Sonraki adım: `scripts/amd_windows_probe.py` çıktısı (ısınmış GPU/CPU süreleri, launch overhead, HIP graph, CTranslate2 matrisi).
+**Kök neden (CTranslate2):** ROCm DLL'leri (`amdhip64_7.dll`, `hipblas.dll`) torch'un pip paketlerinin içinde. `import torch` bu klasörleri DLL arama yoluna ekliyor. Torch'tan önce yüklenen CTranslate2 bunları bulamıyor. İlk testteki `hipErrorInvalidKernelFile` muhtemelen sürücünün `System32` içindeki `amdhip64_7.dll`'i ile wheel'in kütüphanelerinin karışmasıydı.
+
+**Yapılan düzeltme:** `backend/core/rocm_windows.py` ROCm DLL klasörlerini CTranslate2'den önce kaydediyor. Ayrıca CTranslate2'nin HIP sürümü kuruluysa ROCm'da GPU kullanılıyor (`_ctranslate2_cuda_ok`, ASR sidecar, routing raporu), PyTorch Whisper ROCm'u destekliyor olarak işaretlendi.
+
+Açık konular: uygulama (`bun run dev`) "Running on CPU" diyor → VoiceStudio venv'indeki torch kontrol edilecek. CPU yavaşlığı → yeni probe ile ölçülecek.
 
 ---
 
