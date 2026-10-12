@@ -76,8 +76,16 @@ export const CPU_TORCH_ARGS = [
 export const WIN_ARM64_PYTHON_REQUEST = 'cpython-3.11-windows-x86_64';
 export const RUNTIME_REPAIR_PACKAGES = ['torch', 'torchaudio', 'torchvision'] as const;
 export const RUNTIME_NATIVE_IMPORT_PROBE = 'import torch, torchaudio, torchvision';
+/**
+ * torch comes first, as in the backend itself: on native Windows with AMD's
+ * ROCm wheels, `import torch` is what puts the rocm-sdk DLL folders on the
+ * search path, and CTranslate2's ROCm build (imported by faster_whisper) links
+ * `amdhip64_7.dll` from there. Imported the other way round it fails with
+ * "Could not find module ... ctranslate2.dll (or one of its dependencies)" and
+ * a working environment is reported incomplete.
+ */
 export const RUNTIME_IMPORT_PROBE =
-  'import fastapi, uvicorn, omnivoice, faster_whisper, sentencepiece, torch, torchaudio, torchvision';
+  'import torch, torchaudio, torchvision, fastapi, uvicorn, omnivoice, faster_whisper, sentencepiece';
 const RUNTIME_SCHEMA = 'electron-runtime-v2-cudnn8';
 const CUDNN8_PROBE_PREFIX = 'VOICESTUDIO_CUDNN8_PROBE=';
 const REQUIRED_ENV_BYTES = 9 * 1024 ** 3;

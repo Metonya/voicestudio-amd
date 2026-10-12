@@ -654,6 +654,14 @@ def _phase_a_build_inner() -> None:
         _preload_cudnn8()
     except Exception:  # noqa: BLE001 — never block startup on a preload
         pass
+    # Same invariant for AMD on native Windows: CTranslate2's ROCm build links
+    # the HIP runtime from the rocm-sdk wheels, which only torch's import
+    # would otherwise put on the DLL search path. No-op elsewhere.
+    try:
+        from core.rocm_windows import register_rocm_dll_dirs
+        register_rocm_dll_dirs()
+    except Exception:  # noqa: BLE001 — never block startup on a preload
+        pass
 
     _startup_progress.begin_step("ml_imports")
     import torchaudio

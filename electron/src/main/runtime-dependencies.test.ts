@@ -56,6 +56,14 @@ it('checks the matched native PyTorch stack before launching the backend', async
   expect(vi.mocked(execFile).mock.calls[0]?.[1]).toEqual(['-c', RUNTIME_IMPORT_PROBE]);
 });
 
+it('imports torch before faster_whisper, as the backend does', () => {
+  // CTranslate2's ROCm build on Windows finds its HIP DLLs only after torch
+  // registered the rocm-sdk folders; the reverse order fails a working setup.
+  const modules = RUNTIME_IMPORT_PROBE.replace(/^import /, '').split(', ');
+  expect(modules.indexOf('torch')).toBe(0);
+  expect(modules.indexOf('torch')).toBeLessThan(modules.indexOf('faster_whisper'));
+});
+
 it.each(['PYTHONPATH', 'PYTHONHOME'] as const)(
   'isolates imports from inherited %s',
   async (variable) => {

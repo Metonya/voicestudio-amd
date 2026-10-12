@@ -195,7 +195,13 @@ Sistem: Windows 11 25H2, RX 7900 XT, Adrenalin 26.8.1, Ryzen 9 7900X (dahili GPU
 
 **Yapılan düzeltme:** `backend/core/rocm_windows.py` ROCm DLL klasörlerini CTranslate2'den önce kaydediyor. Ayrıca CTranslate2'nin HIP sürümü kuruluysa ROCm'da GPU kullanılıyor (`_ctranslate2_cuda_ok`, ASR sidecar, routing raporu), PyTorch Whisper ROCm'u destekliyor olarak işaretlendi.
 
-Açık konular: uygulama (`bun run dev`) "Running on CPU" diyor → VoiceStudio venv'indeki torch kontrol edilecek. CPU yavaşlığı → yeni probe ile ölçülecek.
+**VoiceStudio venv'i (Python 3.11) ile kurulum:**
+- Stable kanalda Python 3.11 paketleri var: `torch==2.14.0+rocm10.1.0`, `torchvision==0.29.0a0+rocm10.1.0`, `torchaudio==2.11.0.3+rocm10.1.0` (HIP 7.16).
+- **Versiyon yazmadan kurmak işe yaramıyor:** `torch 2.8.0+cpu` zaten "kurulu" sayılıyor ve pip hiçbir şey yapmıyor. Versiyonu açıkça yazmak gerekiyor.
+- CTranslate2 için `ctranslate2-4.8.2-cp311-cp311-win_amd64.whl` (GitHub release zip'inden) çalışıyor.
+- Uygulama ilk denemede "Python environment is incomplete" dedi. Sebep: Electron'un açılış kontrolü `faster_whisper`'ı torch'tan önce import ediyordu. Kontrolün sırası backend ile aynı yapıldı (önce torch). Backend de açılışta ROCm DLL klasörlerini kaydediyor.
+
+Açık konu: CPU yavaşlığı → yeni probe ile ölçülecek.
 
 ---
 

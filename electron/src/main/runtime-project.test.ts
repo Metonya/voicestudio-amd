@@ -262,7 +262,7 @@ describe('packaged runtime setup', () => {
     const sync = run.mock.calls.find(([, args]) => args[0] === 'sync');
     expect(sync?.[1]).toContain('--managed-python');
     const verify = run.mock.calls.find(
-      ([, args]) => args[0] === '-c' && args[1]?.includes('import fastapi'),
+      ([, args]) => args[0] === '-c' && args[1] === RUNTIME_IMPORT_PROBE,
     );
     expect(verify?.[1][1]).toContain('sentencepiece');
   });
@@ -331,7 +331,7 @@ describe('packaged runtime setup', () => {
     const { bundle, project } = await fixture();
     const run = vi.fn(async (_command: string, args: string[]) => {
       await interpreter(project);
-      if (args[0] === '-c' && args[1]?.includes('import fastapi')) {
+      if (args[0] === '-c' && args[1] === RUNTIME_IMPORT_PROBE) {
         throw new Error('native import failed');
       }
     });
