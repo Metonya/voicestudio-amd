@@ -174,6 +174,27 @@ test("Windows ROCm opt-in falls back to a supported CPU or CUDA wheel", async ()
   assert.equal(requestedTorchVariant({ OMNIVOICE_TORCH_VARIANT: "default" }), "cuda");
 });
 
+test("Windows ROCm opt-in syncs CPU wheels and says the AMD build comes next", async () => {
+  const lines = [];
+  const calls = [];
+  await setupApi({
+    env: { OMNIVOICE_TORCH_VARIANT: "rocm" },
+    platform: "win32",
+    arch: "x64",
+    selectVariant: async () => "cpu",
+    log: (line) => lines.push(line),
+    repairNativeLibraries: async () => {},
+    run: (cmd, args) => {
+      calls.push([cmd, ...args]);
+      return { status: 0 };
+    },
+  });
+  assert.match(lines[0], /AMD ROCm build is installed next/);
+  assert.doesNotMatch(lines[0], /unavailable/);
+  // scripts/setup.py performs the ROCm install after the CPU sync.
+  assert.deepEqual(calls.at(-1), ["uv", "run", "--no-sync", "python", "scripts/setup.py"]);
+});
+
 test("Windows ARM64 selects CPU wheels and an emulated x64 Python", async () => {
   assert.equal(
     await selectTorchVariant({

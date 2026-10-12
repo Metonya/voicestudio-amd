@@ -88,28 +88,41 @@ The drive must be connected when VoiceStudio starts.
 ships the CUDA build of PyTorch; with an NVIDIA GPU and a regular NVIDIA
 driver it's picked up automatically (no CUDA Toolkit install needed).
 
-**AMD GPUs — including Ryzen / Ryzen AI integrated Radeon graphics — do not
-accelerate PyTorch engines on Windows.** The runtime has PyTorch 2.8 as either
-the NVIDIA CUDA build or (with no NVIDIA driver present) the CPU-only build;
-neither can drive a Radeon card, so those engines run on the CPU. pytorch.org publishes no Windows ROCm wheels, and VoiceStudio's ROCm
-option (`OMNIVOICE_TORCH_VARIANT=rocm`) is Linux-only — it is ignored on Windows
-rather than failing setup. (The Ryzen AI NPU is likewise not used.) Everything
-still works on CPU, just slower. What you can do today:
+**AMD GPUs do not accelerate PyTorch engines in the Windows installer.** The
+installed runtime has PyTorch as either the NVIDIA CUDA build or (with no NVIDIA
+driver present) the CPU-only build; neither can drive a Radeon card, so those
+engines run on the CPU. Ryzen / Ryzen AI integrated graphics and the Ryzen AI
+NPU are not used. Everything still works on CPU, just slower. What you can do:
 
+- **Source install with AMD ROCm (opt-in, discrete Radeon RX 6000 / 7000 / 9000).**
+  With `OMNIVOICE_TORCH_VARIANT=rocm` set, `bun run setup:api` installs AMD's
+  own Windows PyTorch from its TheRock index (exact pins, plus the kernel
+  package for your card) and CTranslate2's ROCm build, so the PyTorch engines
+  *and* faster-whisper / WhisperX run on the GPU. Your card's target is
+  detected from its name; set `OMNIVOICE_ROCM_GFX` (for example `gfx1100` for an
+  RX 7900 XT/XTX) if setup says it was not recognised. Setup downloads AMD's
+  wheels (about 1.6 GB) and the CTranslate2 wheels from its GitHub release
+  (about 140 MB, hash-checked).
+
+  ```powershell
+  [Environment]::SetEnvironmentVariable("OMNIVOICE_TORCH_VARIANT", "rocm", "User")
+  # open a new terminal, then in the repository:
+  bun run setup:api
+  bun run dev
+  ```
+
+  Validated on an RX 7900 XT (Windows 11 25H2, Adrenalin 26.8.1): OmniVoice,
+  voice cloning, PyTorch Whisper and faster-whisper on the GPU. Engines that
+  install into their own environment (IndexTTS, CosyVoice and others) still
+  run on the CPU. Keep the variable set: every `bun run setup:api` re-applies
+  the swap after syncing the lockfile.
 - **Use an engine with its own GPU runtime.** [audio.cpp](../engines/audio-cpp.md)
   (Breeze-TTS-2) ships a Vulkan build that runs on Radeon GPUs: install the
   runtime from **Settings → Models**. VoiceStudio picks the discrete GPU
   automatically.
 - **Run on Linux** (native, or the ROCm Docker image) for ROCm acceleration of
   the PyTorch engines — see [linux.md — AMD GPU (ROCm)](linux.md#amd-gpu-rocm).
-- **Advanced / unsupported: AMD's own Windows ROCm wheels.** AMD publishes
-  PyTorch ROCm wheels for Windows (`https://repo.amd.com/rocm/whl-multi-arch/`,
-  Python 3.11–3.14, RDNA 3 / RDNA 4 cards such as the RX 7000 and RX 9000 series).
-  They are PyTorch 2.9 or newer, not the 2.8 the engines here are validated
-  against, and faster-whisper (CTranslate2) needs its own separate HIP build for
-  the GPU, so expect parts of the app (WhisperX is a reported example) to break. VoiceStudio does not install them, and no engine
-  parity is claimed. DirectML is not an option either: `torch-directml` needs
-  PyTorch 2.4.
+- DirectML is not an option: `torch-directml` needs PyTorch 2.4.
 
 **Settings → Performance → GPU acceleration** shows exactly what applies to your
 machine: the GPUs Windows reports, which PyTorch build is installed, and a

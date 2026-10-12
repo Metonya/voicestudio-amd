@@ -15,6 +15,8 @@
    ROCm wheel — the same swap the packaged app's bootstrap performs, so a
    source install (`bun run desktop`) on an AMD GPU is not stuck on CPU. Runs
    AFTER `uv sync`, which always restores the locked CUDA build (#1665).
+   On native Windows it installs AMD's TheRock wheels for the detected Radeon
+   plus CTranslate2's ROCm build (see backend/core/rocm_windows.py).
 
 Run automatically as part of `bun run setup:api` — no user action required.
 
@@ -91,6 +93,120 @@ def _ensure_rocm_torch():
         print(f"⚠ ROCm torch install failed ({exc}); keeping the default torch build")
         return
     print("✓ ROCm torch installed")
+
+
+# ── AMD ROCm on native Windows (opt-in) ───────────────────────────────────
+# Same opt-in as Linux, different source: AMD's TheRock index and exact pins,
+# the GPU's `[device-gfxNNNN]` kernel extra, and CTranslate2's ROCm wheel so
+# faster-whisper/WhisperX run on the GPU too. The plan (pins, index, gfx
+# detection, hashes) lives in backend/core/rocm_windows.py, shared with the app.
+
+def _rocm_windows_plan():
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
+    from core import rocm_windows
+    return rocm_windows
+
+
+def windows_rocm_torch_cmd(index_url, requirements, python=None):
+    """`uv pip install` argv for AMD's Windows torch stack into THIS venv.
+
+    AMD's index is searched first and joins PyPI rather than replacing it.
+    uv's default first-index strategy then takes every package AMD publishes
+    (torch, rocm, rocm-sdk-*) only from AMD — a same-named PyPI project can
+    never win — while anything else still resolves from PyPI.
+    """
+    return [
+        "uv", "pip", "install",
+        "--python", python or sys.executable,
+        *requirements,
+        "--extra-index-url", index_url,
+    ]
+
+
+def _installed_torch_version():
+    try:
+        from importlib.metadata import version
+        return version("torch")
+    except Exception:
+        return None
+
+
+def _site_packages():
+    import sysconfig
+    return sysconfig.get_paths()["purelib"]
+
+
+def _fetch_ct2_rocm_wheel(plan, cache_dir):
+    """Download (once, hash-verified) CTranslate2's ROCm zip; return the wheel path."""
+    import hashlib
+    import urllib.request
+    import zipfile
+
+    os.makedirs(cache_dir, exist_ok=True)
+    archive = os.path.join(cache_dir, os.path.basename(plan.CT2_ROCM_ZIP_URL))
+
+    def _sha256(path):
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+        return digest.hexdigest()
+
+    if not os.path.isfile(archive) or _sha256(archive) != plan.CT2_ROCM_ZIP_SHA256:
+        print(f"⚙ Downloading CTranslate2 {plan.CT2_ROCM_VERSION} ROCm wheels (~140 MB)...")
+        partial = archive + ".part"
+        urllib.request.urlretrieve(plan.CT2_ROCM_ZIP_URL, partial)
+        if _sha256(partial) != plan.CT2_ROCM_ZIP_SHA256:
+            os.remove(partial)
+            raise RuntimeError("CTranslate2 ROCm download failed its sha256 check")
+        os.replace(partial, archive)
+    member = plan.ct2_rocm_wheel_member()
+    with zipfile.ZipFile(archive) as bundle:
+        if member not in bundle.namelist():
+            raise RuntimeError(f"no CTranslate2 ROCm wheel for this Python ({member})")
+        bundle.extract(member, cache_dir)
+    return os.path.join(cache_dir, *member.split("/"))
+
+
+def _ensure_rocm_windows(environ=os.environ):
+    if environ.get("OMNIVOICE_TORCH_VARIANT", "").strip().lower() != "rocm":
+        return
+    plan = _rocm_windows_plan()
+    gfx = plan.windows_rocm_gfx(environ)
+    if gfx is None:
+        print(
+            "⚠ OMNIVOICE_TORCH_VARIANT=rocm, but no supported Radeon GPU was recognised. "
+            "Set OMNIVOICE_ROCM_GFX to your card's target (e.g. gfx1100 for an RX 7900 XT) "
+            "and run `bun run setup:api` again; keeping the CPU build."
+        )
+        return
+    index_url = environ.get("OMNIVOICE_TORCH_INDEX") or plan.THEROCK_STABLE_INDEX_URL
+    if _installed_torch_version() == plan.WINDOWS_ROCM_TORCH:
+        print(f"✓ ROCm torch {plan.WINDOWS_ROCM_TORCH} already installed")
+    else:
+        print(f"⚙ OMNIVOICE_TORCH_VARIANT=rocm — installing AMD's ROCm torch for {gfx} ({index_url})")
+        try:
+            subprocess.check_call(
+                windows_rocm_torch_cmd(index_url, plan.windows_rocm_torch_requirements(gfx))
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            print(f"⚠ ROCm torch install failed ({exc}); keeping the CPU build")
+            return
+        print("✓ ROCm torch installed")
+    if plan.ctranslate2_is_rocm_build(_site_packages()):
+        print("✓ CTranslate2 ROCm build already installed")
+        return
+    try:
+        cache_dir = os.path.join(os.path.dirname(os.path.dirname(sys.executable)), "rocm-wheels")
+        wheel = _fetch_ct2_rocm_wheel(plan, cache_dir)
+        subprocess.check_call([
+            "uv", "pip", "install", "--python", sys.executable,
+            "--no-deps", "--reinstall", wheel,
+        ])
+    except Exception as exc:  # noqa: BLE001 — ASR still works, on the CPU
+        print(f"⚠ CTranslate2 ROCm install failed ({exc}); faster-whisper stays on the CPU")
+        return
+    print(f"✓ CTranslate2 {plan.CT2_ROCM_VERSION} ROCm build installed")
 
 
 # ── Windows: VC++ Redistributable ─────────────────────────────────────────
@@ -208,9 +324,11 @@ def main():
     if sys.platform == "darwin":
         return
 
-    # ── Step 2: opt-in AMD ROCm torch (Linux) ─────────────────────────────
+    # ── Step 2: opt-in AMD ROCm torch ─────────────────────────────────────
     if sys.platform.startswith("linux"):
         _ensure_rocm_torch()
+    elif sys.platform == "win32":
+        _ensure_rocm_windows()
 
     compat_dir = _find_compat_dir()
     if compat_dir is None:

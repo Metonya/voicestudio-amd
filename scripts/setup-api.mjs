@@ -19,9 +19,16 @@ export async function setupApi({
   // The matched torch stack has no native Windows ARM64 torchaudio wheel.
   const pythonArgs =
     platform === "win32" && arch === "arm64" ? ["--python", "cpython-3.11-windows-x86_64"] : [];
-  log(
-    `[setup] PyTorch: ${variant}${variant === "cpu" ? " (GPU acceleration unavailable or disabled; inference will be slower)" : ""}`,
-  );
+  // On Windows the ROCm opt-in syncs the CPU stack first; scripts/setup.py then
+  // swaps in AMD's ROCm wheels, so "unavailable" would be the wrong message.
+  const rocm = (env.OMNIVOICE_TORCH_VARIANT || "").trim().toLowerCase() === "rocm";
+  const note =
+    variant !== "cpu"
+      ? ""
+      : rocm
+        ? " (AMD ROCm build is installed next by scripts/setup.py)"
+        : " (GPU acceleration unavailable or disabled; inference will be slower)";
+  log(`[setup] PyTorch: ${variant}${note}`);
   for (const args of [
     ["sync", "--locked", ...torchSyncArgs(variant), ...pythonArgs],
     ["run", "--no-sync", "python", "scripts/setup.py"],

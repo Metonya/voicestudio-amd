@@ -22,6 +22,11 @@ metadata and the backend fallback mirror it.
 - Using a Gallery design voice opens its workspace immediately and defers model loading until audio is requested. (#2759)
 - Existing local projects, settings and data are unaffected; legacy worker database records are retained and ignored.
 
+### Added
+
+- Source installs on Windows can run on AMD Radeon GPUs: with `OMNIVOICE_TORCH_VARIANT=rocm`, setup installs AMD's ROCm PyTorch for your card and CTranslate2's ROCm build, so OmniVoice, cloning and faster-whisper use the GPU — thanks @Metonya!
+- faster-whisper and WhisperX use AMD GPUs whenever CTranslate2's ROCm build is installed, on Linux and Windows alike — thanks @Metonya!
+
 ### Removed
 
 - Remove licence activation from the open-source Pro page. (#2762)
