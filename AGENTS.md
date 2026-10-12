@@ -44,6 +44,7 @@ Binding for every AI agent (Claude, Codex, Cursor, review bots, …). CLAUDE.md 
 - JavaScript dependency changes require regenerating root `bun.lock` (Docker runs `--frozen-lockfile`).
 - Attribution: commits, PR descriptions and comments carry only the submitter's git identity. Never credit an agent (no agent `Co-authored-by:`, "Generated with …", session links) and never add other names/emails. Human co-authors are fine. Enforced by the `commit-identity` check.
 - Issues: absorb or decline — never defer to a future version. Check the open-PR queue before implementing community-reported fixes.
+- Before any research or implementation, search upstream `debpalash/VoiceStudio` issues and PRs (open and closed) for the topic; extend an existing PR instead of building a parallel one.
 
 ## Shared select controls
 
